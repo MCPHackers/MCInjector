@@ -15,6 +15,7 @@ import java.util.logging.Logger;
 import de.oceanlabs.mcp.mcinjector.data.Access;
 import de.oceanlabs.mcp.mcinjector.data.Constructors;
 import de.oceanlabs.mcp.mcinjector.data.Exceptions;
+import de.oceanlabs.mcp.mcinjector.data.InjectionContext;
 import joptsimple.OptionException;
 import joptsimple.OptionParser;
 import joptsimple.OptionSet;
@@ -105,26 +106,17 @@ public class MCInjector {
 	}
 
 	public void process() throws IOException {
-		if (accIn != null)
-			Access.INSTANCE.load(accIn);
-		if (ctrIn != null)
-			Constructors.INSTANCE.load(ctrIn);
-		if (excIn != null)
-			Exceptions.INSTANCE.load(excIn);
 
 		MCInjector.LOG.info("Processing: " + fileIn);
 		MCInjector.LOG.info("  Output: " + fileOut);
 
-		MCInjectorImpl mci = new MCInjectorImpl();
+		InjectionContext context = new InjectionContext(excIn, accIn, ctrIn);
+		MCInjectorImpl mci = new MCInjectorImpl(context);
+		mci.index(fileIn);
+		mci.process();
+		mci.write(fileOut);
 
-		mci.processJar(fileIn, fileOut);
-
-		if (accOut != null)
-			Access.INSTANCE.dump(accOut);
-		if (ctrOut != null)
-			Constructors.INSTANCE.dump(ctrOut);
-		if (excOut != null)
-			Exceptions.INSTANCE.dump(excOut);
+		context.dump(excOut, accOut, ctrOut);
 
 		MCInjector.LOG.info("Processed " + fileIn);
 	}

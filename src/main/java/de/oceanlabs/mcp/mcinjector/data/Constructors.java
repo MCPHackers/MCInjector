@@ -12,9 +12,7 @@ import java.util.stream.Collectors;
 
 import de.oceanlabs.mcp.mcinjector.MCInjector;
 
-public enum Constructors {
-	INSTANCE;
-
+public class Constructors implements Injection {
 	private Map<String, Integer> fromDesc = new HashMap<>();
 	private Map<Integer, String> fromID = new HashMap<>();
 	private int maxID = 0;

@@ -9,16 +9,16 @@ import org.objectweb.asm.MethodVisitor;
 import org.objectweb.asm.Opcodes;
 
 import de.oceanlabs.mcp.mcinjector.MCInjector;
-import de.oceanlabs.mcp.mcinjector.MCInjectorImpl;
 import de.oceanlabs.mcp.mcinjector.data.Exceptions;
+import de.oceanlabs.mcp.mcinjector.data.InjectionContext;
 
 public class ApplyMap extends ClassVisitor {
+	private final InjectionContext context;
 	String className;
-	MCInjectorImpl injector;
 
-	public ApplyMap(MCInjectorImpl injector, ClassVisitor cn) {
+	public ApplyMap(InjectionContext context, ClassVisitor cn) {
 		super(Opcodes.ASM6, cn);
-		this.injector = injector;
+		this.context = context;
 	}
 
 	@Override
@@ -30,11 +30,10 @@ public class ApplyMap extends ClassVisitor {
 	@Override
 	public MethodVisitor visitMethod(int access, String name, String desc, String signature, String[] exceptions) {
 		// static constructors
-		if (name.equals("<clinit>")) {
-			return super.visitMethod(access, name, desc, signature, exceptions);
+		if (!name.equals("<clinit>")) {
+			exceptions = processExceptions(className, name, desc, exceptions);
 		}
 
-		exceptions = processExceptions(className, name, desc, exceptions);
 
 		// abstract and native methods don't have a Code attribute
 		/*
@@ -42,13 +41,12 @@ public class ApplyMap extends ClassVisitor {
 		 * 0) { return super.visitMethod(access, name, desc, signature, exceptions); }
 		 */
 
-		return new MethodVisitor(api, cv.visitMethod(access, name, desc, signature, exceptions)) {
-		};
+		return super.visitMethod(access, name, desc, signature, exceptions);
 	}
 
 	private String[] processExceptions(String cls, String name, String desc, String[] exceptions) {
 		Set<String> set = new HashSet<>();
-		for (String s : Exceptions.INSTANCE.getExceptions(cls, name, desc))
+		for (String s : context.exc.getExceptions(cls, name, desc))
 			set.add(s);
 		if (exceptions != null) {
 			for (String s : exceptions)
@@ -57,7 +55,7 @@ public class ApplyMap extends ClassVisitor {
 
 		if (set.size() > (exceptions == null ? 0 : exceptions.length)) {
 			exceptions = set.stream().sorted().toArray(x -> new String[x]);
-			Exceptions.INSTANCE.setExceptions(cls, name, desc, exceptions);
+			context.exc.setExceptions(cls, name, desc, exceptions);
 			MCInjector.LOG.log(Level.FINE, "    Adding Exceptions: " + String.join(", ", exceptions));
 		}
 

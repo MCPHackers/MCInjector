@@ -16,8 +16,7 @@ import java.util.stream.Collectors;
 
 import de.oceanlabs.mcp.mcinjector.MCInjector;
 
-public enum Access {
-	INSTANCE;
+public class Access implements Injection {
 
 	public static enum Level {
 		PRIVATE, DEFAULT, PROTECTED, PUBLIC;

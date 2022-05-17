@@ -1,156 +1,104 @@
 package de.oceanlabs.mcp.mcinjector;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.lang.reflect.Field;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.HashSet;
-import java.util.Set;
-import java.util.jar.JarEntry;
-import java.util.logging.Level;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
-import java.util.zip.ZipOutputStream;
 
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassVisitor;
 import org.objectweb.asm.ClassWriter;
-import org.objectweb.asm.MethodVisitor;
-import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.ClassNode;
-import org.objectweb.asm.tree.MethodNode;
 
 import de.oceanlabs.mcp.mcinjector.adaptors.AccessFixer;
 import de.oceanlabs.mcp.mcinjector.adaptors.ApplyMap;
 import de.oceanlabs.mcp.mcinjector.adaptors.ClassInitAdder;
 import de.oceanlabs.mcp.mcinjector.adaptors.InnerClassInitAdder;
+import de.oceanlabs.mcp.mcinjector.data.InjectionContext;
 
-public class MCInjectorImpl {
-	protected void processJar(Path inFile, Path outFile) throws IOException {
-		Set<String> entries = new HashSet<>();
-		try (ZipInputStream inJar = new ZipInputStream(Files.newInputStream(inFile))) {
-			try (ZipOutputStream outJar = new ZipOutputStream(
-					outFile == null ? new ByteArrayOutputStream() : Files.newOutputStream(outFile))) {
-				for (ZipEntry entry = inJar.getNextEntry(); entry != null; entry = inJar.getNextEntry()) {
-					String entryName = entry.getName();
+public class MCInjectorImpl implements Injector {
 
-					if (entry.isDirectory()) {
-						outJar.putNextEntry(new JarEntry(entryName));
-						outJar.closeEntry();
-						continue;
-					}
+    private final Map<String, ClassNode> nameToNode = new HashMap<>();
+    private final List<ClassNode> nodes = new ArrayList<>();
+    private final InjectionContext context;
+    
+    public MCInjectorImpl(InjectionContext injectionContext) {
+    	this.context = injectionContext;
+    }
+	
+	public ClassNode getClass(String cls) {
+		return nameToNode.get(cls);
+	}
 
-					byte[] data = new byte[4096];
-					ByteArrayOutputStream entryBuffer = new ByteArrayOutputStream();
-
-					int len;
-					do {
-						len = inJar.read(data);
-						if (len > 0) {
-							entryBuffer.write(data, 0, len);
-						}
-					} while (len != -1);
-
-					byte[] entryData = entryBuffer.toByteArray();
-
-					boolean mojang = entryName.startsWith("net/minecraft/") || entryName.startsWith("com/mojang/");
-
-					if (entryName.endsWith(".class") && mojang) // TODO: Remove this hardcoding? SRG input? process all?
-					{
-						MCInjector.LOG.log(Level.INFO, "Processing " + entryName);
-
-						entryData = this.processClass(entryData, outFile == null);
-
-						MCInjector.LOG.log(Level.INFO, "Processed " + entryBuffer.size() + " -> " + entryData.length);
-					} else {
-						MCInjector.LOG.log(Level.INFO, "Copying " + entryName);
-					}
-
-					ZipEntry newEntry = new ZipEntry(entryName);
-					newEntry.setTime(0); // Stabilize time.
-					outJar.putNextEntry(newEntry);
-					outJar.write(entryData);
-					outJar.closeEntry();
-					entries.add(entryName);
-				}
-			}
+	@Override
+	public ClassNode processClass(ClassNode cn) {
+        ClassNode cnBase = new ClassNode();
+		ClassVisitor ca = getVisitor(cnBase);
+		cn.accept(ca);
+		return cnBase;
+	}
+	
+	private ClassVisitor getVisitor(ClassVisitor ca) {
+		ca = new ApplyMap(context, ca);
+		ca = new AccessFixer(context, ca);
+		ca = new InnerClassInitAdder(ca);
+		ca = new ClassInitAdder(this, ca);
+		return ca;
+	}
+	
+	public void write(Path out) throws IOException {
+		try (OutputStream os = Files.newOutputStream(out)) {
+			write(os);
 		}
 	}
 
-	public byte[] processClass(byte[] cls, boolean readOnly) {
-		ClassReader cr = new ClassReader(cls);
-		ClassNode cn = new ClassNode();
+    public void write(OutputStream out) throws IOException {
+        try (JarOutputStream jarOut = new JarOutputStream(out)) {
+	        for (ClassNode node : nodes) {
+	            ClassWriter writer = new ClassWriter(0);
+	            node.accept(writer);
+	            jarOut.putNextEntry(new ZipEntry(node.name + ".class"));
+	            jarOut.write(writer.toByteArray());
+	            jarOut.closeEntry();
+	        }
+        }
+    }
 
-		ClassVisitor ca = cn;
-		if (!readOnly) {
-			ca = new ApplyMap(this, ca);
-			ca = new AccessFixer(ca);
-			ca = new InnerClassInitAdder(ca);
-			ca = new ClassInitAdder(ca);
-		}
+    public void index(Path file) throws IOException {
+    	try (FileSystem fs = FileSystems.newFileSystem(file, (ClassLoader)null)) {
+	        Files.walk(fs.getPath("/")).forEach(entry -> {
+	            if (!Files.isDirectory(entry) && entry.getFileName().toString().endsWith(".class")) {
+	                ClassReader reader;
+	                try {
+	                    InputStream is = Files.newInputStream(entry);
+	                    reader = new ClassReader(is);
+	                    is.close();
+	                } catch (IOException e) {
+	                    e.printStackTrace();
+	                    return;
+	                }
+	                ClassNode node = new ClassNode();
+	                reader.accept(node, 0);
+	                nodes.add(node);
+	                nameToNode.put(node.name, node);
+	            }
+	        });
+	    }
+    }
 
-		ca = new ClassVisitor(Opcodes.ASM6, ca) // Top level, so we can print the logs.
-		{
-			@Override
-			public void visit(int version, int access, String name, String signature, String superName,
-					String[] interfaces) {
-				MCInjector.LOG.log(Level.FINE, "Class: " + name + " Extends: " + superName);
-				super.visit(version, access, name, signature, superName, interfaces);
-			}
-
-			@Override
-			public MethodVisitor visitMethod(int access, String name, String desc, String signature,
-					String[] exceptions) {
-				MCInjector.LOG.log(Level.FINE, "  Name: " + name + " Desc: " + desc + " Sig: " + signature);
-				return super.visitMethod(access, name, desc, signature, exceptions);
-			}
-		};
-
-		cr.accept(ca, 0);
-
-		ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-		cn.accept(writer);
-		return writer.toByteArray();
-	}
-
-	private static Field field_mv;
-
-	public static MethodNode getMethodNode(MethodVisitor mv) {
-		try {
-			if (field_mv == null) {
-				field_mv = MethodVisitor.class.getDeclaredField("mv");
-				field_mv.setAccessible(true);
-			}
-			MethodVisitor tmp = mv;
-			while (!(tmp instanceof MethodNode) && tmp != null)
-				tmp = (MethodVisitor) field_mv.get(tmp);
-			return (MethodNode) tmp;
-		} catch (Exception e) {
-			if (e instanceof RuntimeException)
-				throw (RuntimeException) e;
-			throw new RuntimeException(e);
-
-		}
-	}
-
-	private static Field field_cv;
-
-	public static ClassNode getClassNode(ClassVisitor cv) {
-		try {
-			if (field_cv == null) {
-				field_cv = ClassVisitor.class.getDeclaredField("cv");
-				field_cv.setAccessible(true);
-			}
-			ClassVisitor tmp = cv;
-			while (!(tmp instanceof ClassNode) && tmp != null)
-				tmp = (ClassVisitor) field_cv.get(tmp);
-			return (ClassNode) tmp;
-		} catch (Exception e) {
-			if (e instanceof RuntimeException)
-				throw (RuntimeException) e;
-			throw new RuntimeException(e);
-
+	public void process() {
+		for (int i = 0; i < nodes.size(); i++) {
+			ClassNode node = nodes.get(i);
+			nodes.set(i, processClass(node));
 		}
 	}
 }

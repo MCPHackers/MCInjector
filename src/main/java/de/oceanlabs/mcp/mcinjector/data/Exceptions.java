@@ -12,8 +12,7 @@ import java.util.stream.Collectors;
 
 import de.oceanlabs.mcp.mcinjector.MCInjector;
 
-public enum Exceptions {
-	INSTANCE;
+public class Exceptions implements Injection {
 
 	private Map<String, String[]> exceptions = new HashMap<>();
 
